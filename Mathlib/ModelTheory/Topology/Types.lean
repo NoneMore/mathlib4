@@ -95,6 +95,27 @@ instance : CompactSpace (T.CompleteType α) := by
       obtain ⟨_, rfl⟩ := h.2
       exact h.1
 
+/--
+Stone Duality:
+Every clopen set in the Stone space of types corresponds to the set of types
+consistent with some sentence φ.
+-/
+theorem exists_sentence_of_isClopen (U : Set (CompleteType T α)) :
+    IsClopen U → ∃ (φ : L[[α]].Sentence), U = typesWith (T := T) φ := by
+  intro hU
+  obtain ⟨ι,S,hUS,hS⟩ := IsTopologicalBasis.open_eq_iUnion typesWith_basis hU.2
+  obtain ⟨F,hF⟩ := IsCompact.elim_finite_subcover hU.1.isCompact S
+    (fun i => IsTopologicalBasis.isOpen typesWith_basis (hS i))
+    (hUS.subset)
+  replace hF : U = ⋃ i ∈ F, S i := Subset.antisymm hF (by
+    rw [hUS]
+    exact iUnion₂_subset_iUnion (Membership.mem F) S
+  )
+  choose φs hφs using hS
+  exists Formula.iSup (fun (x : F) => φs x.1)
+  simp [typesWith_iSup, hF, hφs]
+  exact Eq.symm (iUnion_subtype (Membership.mem F) fun x ↦ S ↑x)
+
 instance : BaireSpace (T.CompleteType α) := BaireSpace.of_t2Space_locallyCompactSpace
 
 end CompleteType

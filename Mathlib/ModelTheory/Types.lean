@@ -193,6 +193,17 @@ lemma typesWith_inf (φ ψ : L[[α]].Sentence)
   simp only [p.isMaximal.mem_iff_models, ModelsBoundedFormula, ←forall_and]
   exact forall₃_congr fun _ _ _ ↦ BoundedFormula.realize_inf
 
+lemma typesWith_iSup {β : Type*} [Finite β] (f : β → L[[α]].Sentence) :
+    typesWith (T := T) (Formula.iSup f) = ⋃ (i : β), typesWith (f i) := by
+  ext p
+  simp only [typesWith, Set.mem_setOf_eq, Set.mem_iUnion]
+  obtain ⟨M⟩ := p.isMaximal'.1
+  have : ∀ φ, φ ∈ ↑p ↔ φ.Realize M.Carrier := by
+    intro φ
+    simp [←SetLike.mem_coe, p.isMaximal.mem_iff_models]
+    exact (p.isMaximal.isComplete.realize_sentence_iff φ M).symm
+  simp only [this, Sentence.Realize, Formula.realize_iSup]
+
 lemma typesWith_mem {φ} (hφ : φ ∈ (L.lhomWithConstants α).onTheory T)
     : typesWith (T := T) φ = Set.univ
   := univ_subset_iff.mp fun p _ ↦ p.subset hφ
