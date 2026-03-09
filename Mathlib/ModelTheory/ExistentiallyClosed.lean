@@ -31,19 +31,21 @@ bounded formulas, rather than as separate mathematical criteria.
 
 @[expose] public section
 
+universe u v w
+
 namespace FirstOrder
 
 namespace Language
 
-variable {L : Language} {M N P : Type*}
+variable {L : Language.{u, v}} {M N P : Type*}
 variable [L.Structure M] [L.Structure N] [L.Structure P]
 
 namespace Embedding
 
 /-- An embedding is existential if it reflects existential formulas. -/
 def IsExistential (f : M ↪[L] N) : Prop :=
-  ∀ {α : Type*} {φ : L.Formula α}, φ.IsExistential →
-    ∀ v : α → M, φ.Realize (f ∘ v) → φ.Realize v
+  ∀ {n : ℕ} {φ : L.Formula (Fin n)}, φ.IsExistential →
+    ∀ v : (Fin n) → M, φ.Realize (f ∘ v) → φ.Realize v
 
 /-- The identity embedding is existential. -/
 theorem isExistential_id : (Embedding.refl L M).IsExistential := by
@@ -86,37 +88,6 @@ lemma isExistential_boundedFormula_fin_of_exists (f : M ↪[L] N)
       obtain ⟨ys, hys⟩ := ih (Fin.snoc xs a) ha
       exact ⟨Fin.init ys, ys (Fin.last _), by simpa [Fin.snoc_init_self] using hys⟩
 
-lemma isExistential_boundedFormula_of_exists (f : M ↪[L] N)
-    (h :
-      ∀ (m n : ℕ) (φ : L.BoundedFormula (Fin m) n)
-        (_hφ : φ.IsQF) (x : Fin m → M) (xs : Fin n → N),
-        φ.Realize (f ∘ x) xs →
-          ∃ ys : Fin n → M, φ.Realize x ys) :
-    ∀ {α : Type*} (n : ℕ) (φ : L.BoundedFormula α n)
-      (hφ : φ.IsExistential) (v : α → M) (xs : Fin n → N),
-      φ.Realize (f ∘ v) xs →
-        ∃ ys : Fin n → M, φ.Realize v ys := by
-  classical
-  intro α n φ hφ v xs hφ'
-  let s := φ.freeVarFinset
-  let e := Fintype.equivFin s
-  let ψ := BoundedFormula.relabelEquiv e (φ.restrictFreeVar id)
-  replace hφ' : ψ.Realize (f ∘ (v ∘ Subtype.val ∘ e.symm)) xs := by
-    simp [ψ, BoundedFormula.realize_relabelEquiv]
-    simpa [Function.comp_assoc] using
-      (BoundedFormula.realize_restrictFreeVar (φ := φ) (f := id)
-        (v := f ∘ v ∘ Subtype.val) (v' := f ∘ v) (xs := xs) (by simp)).2 hφ'
-  induction hφ with
-  | @of_isQF n' φ' hφ =>
-    obtain ⟨ys,hys⟩ := h (Fintype.card ↥s) n' ψ (by simp only [ψ] ; exact (hφ.restrictFreeVar id).relabelEquiv e) (v ∘ Subtype.val ∘ ⇑e.symm) xs hφ'
-    exists ys
-    simpa [ψ, BoundedFormula.realize_restrictFreeVar] using hys
-  | @ex n' φ' hφ h' =>
-    apply isExistential_boundedFormula_fin_of_exists at h
-    obtain ⟨ys,hys⟩ := h (Fintype.card ↥s) n' ψ (by sorry) (v ∘ Subtype.val ∘ ⇑e.symm) xs hφ'
-    exists ys
-    simpa [ψ, BoundedFormula.realize_restrictFreeVar] using hys
-
 /-- A finite-tuple witness condition for quantifier-free formulas implies that an embedding is
 existential.
 -/
@@ -127,9 +98,8 @@ theorem isExistential_of_exists (f : M ↪[L] N)
         φ.Realize (f ∘ x) xs →
           ∃ ys : Fin n → M, φ.Realize x ys) :
     f.IsExistential := by
-  intro α φ hφ v hv
-  obtain ⟨ys, hys⟩ := f.isExistential_boundedFormula_of_exists h 0 φ hφ v default (by
-    simpa [Formula.Realize] using hv)
+  intro n φ hφ v hv
+  obtain ⟨ys,hys⟩ := f.isExistential_boundedFormula_fin_of_exists h n 0 φ hφ v default hv
   simpa [Formula.Realize, Subsingleton.elim ys default] using hys
 
 /-- Witness-style reformulation of `Embedding.IsExistential` using quantifier-free bounded
@@ -146,9 +116,45 @@ lemma isExistential_iff_exists (f : M ↪[L] N) :
     replace hφ' : (φ.exs).Realize (f ∘ v) := by
       simp only [BoundedFormula.realize_exs] ; exists xs
     have : φ.exs.Realize v := by
-      sorry
+      exact h hφ.isExistential.exs v hφ'
     simpa using this
   · exact f.isExistential_of_exists
+
+lemma imap_exBoundedFormula (f : M ↪[L] N)
+    (h : f.IsExistential) :
+    ∀ {α : Type*} (n : ℕ) (φ : L.BoundedFormula α n)
+      (_hφ : φ.IsExistential) (v : α → M) (xs : Fin n → N),
+      φ.Realize (f ∘ v) xs →
+        ∃ ys : Fin n → M, φ.Realize v ys := by
+  classical
+  rw [isExistential_iff_exists] at h
+  intro α n φ hφ v xs hφ'
+  let s := φ.freeVarFinset
+  let e := Fintype.equivFin s
+  let ψ := BoundedFormula.relabelEquiv e (φ.restrictFreeVar id)
+  replace hφ' : ψ.Realize (f ∘ (v ∘ Subtype.val ∘ e.symm)) xs := by
+    simp [ψ, BoundedFormula.realize_relabelEquiv]
+    simpa [Function.comp_assoc] using
+      (BoundedFormula.realize_restrictFreeVar (φ := φ) (f := id)
+        (v := f ∘ v ∘ Subtype.val) (v' := f ∘ v) (xs := xs) (by simp)).2 hφ'
+  induction hφ with
+  | @of_isQF n' φ' hφ =>
+    obtain ⟨ys,hys⟩ := h (Fintype.card ↥s) n' ψ (by
+      simp only [ψ]
+      exact (hφ.restrictFreeVar id).relabelEquiv e)
+      (v ∘ Subtype.val ∘ ⇑e.symm) xs hφ'
+    exists ys
+    simpa [ψ, BoundedFormula.realize_restrictFreeVar] using hys
+  | @ex n' φ' hφ h' =>
+    apply isExistential_boundedFormula_fin_of_exists at h
+    have : ψ.IsExistential := by
+      simp only [BoundedFormula.freeVarFinset, BoundedFormula.freeVarFinset.eq_5, ψ]
+      refine BoundedFormula.IsExistential.relabelEquiv ?_ e
+      refine BoundedFormula.IsExistential.restrictFreeVar ?_ id
+      exact BoundedFormula.IsExistential.ex hφ
+    obtain ⟨ys,hys⟩ := h (Fintype.card ↥s) n' ψ this (v ∘ Subtype.val ∘ ⇑e.symm) xs hφ'
+    exists ys
+    simpa [ψ, BoundedFormula.realize_restrictFreeVar] using hys
 
 end Embedding
 
@@ -165,18 +171,18 @@ end Equiv
 namespace Theory
 
 variable {T : L.Theory}
-variable [M ⊨ T]
+variable {M : Type w} [L.Structure M] [M ⊨ T]
 
 /-- A model of `T` is existentially closed if every embedding into another model of `T`
 is existential. -/
-def IsExistentiallyClosed (T : L.Theory) (M : Type*) [L.Structure M] [M ⊨ T] : Prop :=
-  ∀ {N : Type*} [L.Structure N] [N ⊨ T], ∀ f : M ↪[L] N, f.IsExistential
+def IsExistentiallyClosed (T : L.Theory) (M : Type w) [L.Structure M] [M ⊨ T] : Prop :=
+  ∀ N : Theory.ModelType.{u, v, max u v w} T, ∀ f : M ↪[L] N, f.IsExistential
 
 /-- Unfolding `Theory.IsExistentiallyClosed` through
 `Embedding.isExistential_iff_exists`. -/
-lemma isExistentiallyClosed_iff (T : L.Theory) (M : Type*) [L.Structure M] [M ⊨ T] :
+lemma isExistentiallyClosed_iff (T : L.Theory) (M : Type w) [L.Structure M] [M ⊨ T] :
     T.IsExistentiallyClosed M ↔
-      ∀ {N : Type*} [L.Structure N] [N ⊨ T],
+      ∀ N : Theory.ModelType.{u, v, max u v w} T,
         ∀ f : M ↪[L] N,
           ∀ (m n : ℕ) (φ : L.BoundedFormula (Fin m) n)
             (_hφ : φ.IsQF) (x : Fin m → M) (xs : Fin n → N),
@@ -184,7 +190,6 @@ lemma isExistentiallyClosed_iff (T : L.Theory) (M : Type*) [L.Structure M] [M �
               ∃ ys : Fin n → M, φ.Realize x ys := by
   dsimp [IsExistentiallyClosed]
   simp [Embedding.isExistential_iff_exists]
-  sorry
 
 end Theory
 
