@@ -49,25 +49,19 @@ def IsExistential (f : M ↪[L] N) : Prop :=
 
 /-- The identity embedding is existential. -/
 theorem isExistential_id : (Embedding.refl L M).IsExistential := by
-  dsimp [IsExistential]
-  aesop
+  intro n φ hφ v hv
+  simpa using hv
 
 /-- Composition of existential embeddings is existential. -/
 theorem IsExistential.comp {f : M ↪[L] N} {g : N ↪[L] P} :
     f.IsExistential → g.IsExistential → (g.comp f).IsExistential := by
-  dsimp [IsExistential]
   intro h h₁ α φ hφ v hφ'
-  apply h
-  · simp_all
-  · apply h₁
-    · simp_all
-    · exact hφ'
+  exact h hφ v <| h₁ hφ (f ∘ v) <| by simpa using hφ'
 
 /-- An elementary embedding is existential. -/
 theorem isExistential_of_elementary (f : M ↪ₑ[L] N) : f.toEmbedding.IsExistential := by
-  dsimp [IsExistential]
-  intro α φ hφ v
-  simp
+  intro α φ hφ v hv
+  simpa using hv
 
 lemma isExistential_boundedFormula_fin_of_exists (f : M ↪[L] N)
     (h :
@@ -114,47 +108,42 @@ lemma isExistential_iff_exists (f : M ↪[L] N) :
   · intro h m n φ hφ v xs hφ'
     dsimp [Embedding.IsExistential] at h
     replace hφ' : (φ.exs).Realize (f ∘ v) := by
-      simp only [BoundedFormula.realize_exs] ; exists xs
-    have : φ.exs.Realize v := by
-      exact h hφ.isExistential.exs v hφ'
-    simpa using this
+      simp only [BoundedFormula.realize_exs]
+      exact ⟨xs, hφ'⟩
+    simpa [BoundedFormula.realize_exs] using h hφ.isExistential.exs v hφ'
   · exact f.isExistential_of_exists
 
-lemma imap_exBoundedFormula (f : M ↪[L] N)
+lemma imap_exBoundedFormula {f : M ↪[L] N}
     (h : f.IsExistential) :
     ∀ {α : Type*} (n : ℕ) (φ : L.BoundedFormula α n)
-      (_hφ : φ.IsExistential) (v : α → M) (xs : Fin n → N),
-      φ.Realize (f ∘ v) xs →
+      (_hφ : φ.IsExistential) (v : α → M),
+      (∃ xs : Fin n → N, φ.Realize (f ∘ v) xs) ↔
         ∃ ys : Fin n → M, φ.Realize v ys := by
   classical
-  rw [isExistential_iff_exists] at h
-  intro α n φ hφ v xs hφ'
-  let s := φ.freeVarFinset
-  let e := Fintype.equivFin s
-  let ψ := BoundedFormula.relabelEquiv e (φ.restrictFreeVar id)
-  replace hφ' : ψ.Realize (f ∘ (v ∘ Subtype.val ∘ e.symm)) xs := by
-    simp [ψ, BoundedFormula.realize_relabelEquiv]
-    simpa [Function.comp_assoc] using
-      (BoundedFormula.realize_restrictFreeVar (φ := φ) (f := id)
-        (v := f ∘ v ∘ Subtype.val) (v' := f ∘ v) (xs := xs) (by simp)).2 hφ'
-  induction hφ with
-  | @of_isQF n' φ' hφ =>
-    obtain ⟨ys,hys⟩ := h (Fintype.card ↥s) n' ψ (by
-      simp only [ψ]
-      exact (hφ.restrictFreeVar id).relabelEquiv e)
-      (v ∘ Subtype.val ∘ ⇑e.symm) xs hφ'
-    exists ys
-    simpa [ψ, BoundedFormula.realize_restrictFreeVar] using hys
-  | @ex n' φ' hφ h' =>
-    apply isExistential_boundedFormula_fin_of_exists at h
-    have : ψ.IsExistential := by
-      simp only [BoundedFormula.freeVarFinset, BoundedFormula.freeVarFinset.eq_5, ψ]
-      refine BoundedFormula.IsExistential.relabelEquiv ?_ e
-      refine BoundedFormula.IsExistential.restrictFreeVar ?_ id
-      exact BoundedFormula.IsExistential.ex hφ
-    obtain ⟨ys,hys⟩ := h (Fintype.card ↥s) n' ψ this (v ∘ Subtype.val ∘ ⇑e.symm) xs hφ'
-    exists ys
-    simpa [ψ, BoundedFormula.realize_restrictFreeVar] using hys
+  have hfin := f.isExistential_boundedFormula_fin_of_exists ((isExistential_iff_exists f).1 h)
+  intro α n φ hφ v
+  constructor
+  · rintro ⟨xs, hφ'⟩
+    let s := φ.freeVarFinset
+    let e := Fintype.equivFin s
+    let ψ := BoundedFormula.relabelEquiv e (φ.restrictFreeVar id)
+    have hψ : ψ.IsExistential := by
+      simpa only [BoundedFormula.freeVarFinset, BoundedFormula.freeVarFinset.eq_5, ψ] using
+        (hφ.restrictFreeVar id).relabelEquiv e
+    have hφ'' : ψ.Realize (f ∘ (v ∘ Subtype.val ∘ e.symm)) xs := by
+      simp [ψ, BoundedFormula.realize_relabelEquiv]
+      simpa [Function.comp_assoc] using
+        (BoundedFormula.realize_restrictFreeVar (φ := φ) (f := id)
+          (v := f ∘ v ∘ Subtype.val) (v' := f ∘ v) (xs := xs) (by simp)).2 hφ'
+    obtain ⟨ys, hys⟩ := hfin (Fintype.card ↥s) n ψ hψ (v ∘ Subtype.val ∘ e.symm) xs hφ''
+    exact ⟨ys, by simpa [ψ, BoundedFormula.realize_restrictFreeVar] using hys⟩
+  · rintro ⟨ys, hys⟩
+    exact ⟨f ∘ ys, hφ.realize_embedding f hys⟩
+
+lemma map_exFormula (f : M ↪[L] N) {h : f.IsExistential}
+    {α : Type*} (φ : L.Formula α) (hφ : φ.IsExistential) (v : α → M) :
+    φ.Realize (f ∘ v) ↔ φ.Realize v := by
+  simpa [Formula.Realize] using f.imap_exBoundedFormula h 0 φ hφ v
 
 end Embedding
 
@@ -162,9 +151,8 @@ namespace Equiv
 
 /-- A first-order equivalence induces an existential embedding. -/
 theorem isExistential (f : M ≃[L] N) : f.toEmbedding.IsExistential := by
-  dsimp [Embedding.IsExistential]
-  intro α φ hφ v
-  simp
+  intro α φ hφ v hv
+  simpa using hv
 
 end Equiv
 
