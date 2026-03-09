@@ -97,6 +97,33 @@ protected theorem relabel {m : ℕ} {φ : L.BoundedFormula α m} (h : φ.IsQF) (
     (φ.relabel f).IsQF :=
   IsQF.recOn h isQF_bot (fun h => (h.relabel f).isQF) fun _ _ h1 h2 => h1.imp h2
 
+protected theorem restrictFreeVar [DecidableEq α] {m : ℕ} {φ : L.BoundedFormula α m}
+    (h : φ.IsQF) (f : φ.freeVarFinset → β) : (φ.restrictFreeVar f).IsQF := by
+  induction h with
+  | falsum => exact IsQF.falsum
+  | of_isAtomic hA =>
+    cases hA with
+    | equal t₁ t₂ => simpa [BoundedFormula.restrictFreeVar] using (IsAtomic.equal _ _).isQF
+    | rel R ts => simpa [BoundedFormula.restrictFreeVar] using (IsAtomic.rel _ _).isQF
+  | imp h₁ h₂ ih₁ ih₂ => simpa [restrictFreeVar, freeVarFinset.eq_4] using IsQF.imp (ih₁ _) (ih₂ _)
+
+protected theorem relabelEquiv {m : ℕ} {φ : L.BoundedFormula α m} (h : φ.IsQF)
+    (g : α ≃ β) : (relabelEquiv g φ).IsQF := by
+  induction h with
+  | falsum =>
+      simpa [BoundedFormula.relabelEquiv, mapTermRelEquiv_apply, Equiv.coe_refl] using
+        (IsQF.falsum : IsQF (⊥ : L.BoundedFormula β m))
+  | of_isAtomic hA =>
+    cases hA with
+    | equal t₁ t₂ =>
+        simpa [BoundedFormula.relabelEquiv, mapTermRelEquiv_apply, Equiv.coe_refl] using
+          (IsAtomic.equal _ _).isQF
+    | rel R ts =>
+        simpa [BoundedFormula.relabelEquiv, mapTermRelEquiv_apply, Equiv.coe_refl] using
+          (IsAtomic.rel _ _).isQF
+  | imp h₁ h₂ ih₁ ih₂ =>
+      simpa [BoundedFormula.relabelEquiv, mapTermRelEquiv_apply, Equiv.coe_refl] using ih₁.imp ih₂
+
 protected theorem liftAt {k m : ℕ} (h : IsQF φ) : (φ.liftAt k m).IsQF :=
   IsQF.recOn h isQF_bot (fun ih => ih.liftAt.isQF) fun _ _ ih1 ih2 => ih1.imp ih2
 
@@ -349,6 +376,27 @@ lemma IsQF.isExistential {φ : L.BoundedFormula α n} : IsQF φ → IsExistentia
 
 lemma IsAtomic.isExistential {φ : L.BoundedFormula α n} (h : IsAtomic φ) : IsExistential φ :=
   h.isQF.isExistential
+
+lemma IsExistential.restrictFreeVar [DecidableEq α] {m : ℕ} {φ : L.BoundedFormula α m}
+    (h : φ.IsExistential) (f : φ.freeVarFinset → β) : (φ.restrictFreeVar f).IsExistential := by
+  induction h with
+  | of_isQF hQF => exact (hQF.restrictFreeVar f).isExistential
+  | ex _ ih =>
+      simpa [BoundedFormula.ex, BoundedFormula.not, BoundedFormula.restrictFreeVar,
+        freeVarFinset.eq_4] using (ih _).ex
+
+lemma IsExistential.relabelEquiv {m : ℕ} {φ : L.BoundedFormula α m} (h : φ.IsExistential)
+    (g : α ≃ β) : (relabelEquiv g φ).IsExistential := by
+  induction h with
+  | of_isQF hQF => exact (hQF.relabelEquiv g).isExistential
+  | ex _ ih =>
+      simpa [BoundedFormula.relabelEquiv, mapTermRelEquiv_apply, Equiv.coe_refl,
+        BoundedFormula.ex, BoundedFormula.not] using ih.ex
+
+lemma IsExistential.exs {φ : L.BoundedFormula α n} (h : IsExistential φ) : IsExistential φ.exs := by
+  induction n with
+  | zero => simpa [BoundedFormula.exs] using h
+  | succ n ih => simpa [BoundedFormula.exs] using ih h.ex
 
 section Preservation
 
