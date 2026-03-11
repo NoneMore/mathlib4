@@ -2,6 +2,7 @@ module
 
 public import Mathlib.ModelTheory.ElementarySubstructures
 public import Mathlib.ModelTheory.Complexity
+public import Mathlib.ModelTheory.PartialEquiv
 public import Mathlib.ModelTheory.Satisfiability
 
 /-!
@@ -20,6 +21,7 @@ public import Mathlib.ModelTheory.Satisfiability
 - `FirstOrder.Language.Embedding.isExistential_of_elementary`
 - `FirstOrder.Language.Embedding.isExistential_of_exists`
 - `FirstOrder.Language.Equiv.isExistential`
+- `FirstOrder.Language.Theory.isExistentiallyClosed_of_isExtensionPair`
 
 ## Implementation notes
 
@@ -178,6 +180,74 @@ lemma isExistentiallyClosed_iff (T : L.Theory) (M : Type w) [L.Structure M] [M �
               ∃ ys : Fin n → M, φ.Realize x ys := by
   dsimp [IsExistentiallyClosed]
   simp [Embedding.isExistential_iff_exists]
+
+/-- If every model of `T` forms an extension pair with `M`, then `M` is existentially closed. -/
+theorem isExistentiallyClosed_of_isExtensionPair (T : L.Theory) (M : Type w)
+    [L.Structure M] [M ⊨ T]
+    (hExt : ∀ N : Theory.ModelType.{u, v, max u v w} T, L.IsExtensionPair N M) :
+    T.IsExistentiallyClosed M := by
+  classical
+  dsimp [IsExistentiallyClosed]
+  intro N f
+  refine f.isExistential_of_exists ?_
+  intro m n φ hφ x xs hxs
+  have hmain :
+      ∀ ws : Finset N,
+        ∃ S : L.Substructure N,
+          ∃ xS : Fin m → S,
+            S.FG ∧ ((ws : Set N) ⊆ S) ∧
+              (Substructure.subtype S ∘ xS = f ∘ x) ∧
+              ∃ g : S ↪[L] M, g ∘ xS = x := by
+    intro ws
+    refine Finset.induction_on ws ?_ ?_
+    · let S : L.Substructure N := Substructure.closure L (Set.range (f ∘ x))
+      let xS : Fin m → S := fun i =>
+        ⟨f (x i), Substructure.subset_closure (L := L) ⟨i, rfl⟩⟩
+      have hS_le_range : S ≤ f.toHom.range := by
+        refine Substructure.closure_le.2 ?_
+        rintro _ ⟨i, rfl⟩
+        exact ⟨x i, rfl⟩
+      refine ⟨S, xS, Substructure.fg_closure (Set.finite_range _), by simp, by
+        funext i
+        rfl, f.equivRange.symm.toEmbedding.comp (Substructure.inclusion hS_le_range), by
+        funext i
+        change f.equivRange.symm (f.equivRange (x i)) = x i
+        exact Equiv.symm_apply_apply f.equivRange (x i)⟩
+    · intro a ws _ ih
+      obtain ⟨S, xS, hS_fg, hS_ws, hxS, g, hg⟩ := ih
+      obtain ⟨g', hg'⟩ :=
+        (isExtensionPair_iff_exists_embedding_closure_singleton_sup).1 (hExt N) S hS_fg g a
+      let S' : L.Substructure N := Substructure.closure L (Set.singleton a) ⊔ S
+      let xS' : Fin m → S' := fun i => (Substructure.inclusion le_sup_right) (xS i)
+      refine ⟨S', xS', (Substructure.fg_closure_singleton _).sup hS_fg, ?_, ?_, g', ?_⟩
+      · change ∀ y, y ∈ insert a ws → y ∈ S'
+        intro y hy
+        rcases Finset.mem_insert.1 hy with hEq | hy
+        · have ha : a ∈ Substructure.closure L (Set.singleton a) :=
+            Substructure.subset_closure (L := L) (Set.mem_singleton a)
+          have hleft : Substructure.closure L (Set.singleton a) ≤ S' := by
+            dsimp [S']
+            exact le_sup_left
+          subst y
+          exact hleft ha
+        · have hright : S ≤ S' := by
+            dsimp [S']
+            exact le_sup_right
+          exact hright (hS_ws hy)
+      · funext i
+        change ((xS' i : _)) = f (x i)
+        simpa [xS'] using congr_fun hxS i
+      · funext i
+        have hEq := (Embedding.ext_iff.1 hg') (xS i)
+        exact hEq.symm.trans (congr_fun hg i)
+  obtain ⟨S, xS, _, hS_ws, hxS, g, hg⟩ := hmain (Finset.univ.image xs)
+  let xsS : Fin n → S := fun i => ⟨xs i, hS_ws (Finset.mem_image.2 ⟨i, by simp⟩)⟩
+  refine ⟨g ∘ xsS, ?_⟩
+  simpa [hg] using
+    (hφ.realize_embedding g (v := xS) (xs := xsS)).2 <|
+      (hφ.realize_embedding (Substructure.subtype S) (v := xS) (xs := xsS)).1 <| by
+        rw [hxS]
+        simpa [xsS] using hxs
 
 end Theory
 

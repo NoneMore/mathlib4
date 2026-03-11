@@ -9,6 +9,7 @@ public import Mathlib.Algebra.CharZero.Infinite
 public import Mathlib.Data.Rat.Encodable
 public import Mathlib.Data.Finset.Sort
 public import Mathlib.ModelTheory.Complexity
+public import Mathlib.ModelTheory.ExistentiallyClosed
 public import Mathlib.ModelTheory.Fraisse
 public import Mathlib.Order.CountableDenseLinearOrder
 
@@ -490,6 +491,13 @@ lemma dlo_isExtensionPair
   ext ⟨x, xS⟩
   refine congr_fun hg.symm ⟨x, (?_ : x ∈ hS.toFinset)⟩
   simp only [Set.Finite.mem_toFinset, SetLike.mem_coe, xS]
+
+set_option backward.isDefEq.respectTransparency false in
+theorem dlo_isExistentiallyClosed
+    (M : Type w) [Language.order.Structure M] [Nonempty M] [M ⊨ Language.order.dlo] :
+    Language.order.linearOrderTheory.IsExistentiallyClosed M := by
+  exact Language.Theory.isExistentiallyClosed_of_isExtensionPair _ _ fun N =>
+    dlo_isExtensionPair N M
 
 set_option backward.isDefEq.respectTransparency false in
 instance (M : Type w) [Language.order.Structure M] [M ⊨ Language.order.dlo] [Nonempty M] :
