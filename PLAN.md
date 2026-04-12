@@ -1,493 +1,321 @@
-# `ModelTheory` Constant-Expansion Refactor Plan
-
-## Findings
-
-1. The core language-level definition is already fine.
-   In `Mathlib/ModelTheory/LanguageMap.lean`,
-   `Language.withConstants` is still
-   `L.sum (constantsOn α)`;
-   `lhomWithConstants`, `withConstantsStructure`, and `withConstants_expansion`
-   are already present and usable.
-
-2. The existing type-synonym technique is only used along one narrow path.
-   At the moment, `LanguageMap.lean` only uses a real type synonym in
-   `Embedding.withConstants : Type := N`,
-   where the point is to attach an `L[[A]]`-structure to the same underlying carrier via a parameter-dependent interpretation.
-   `ElementaryEmbedding.liftWithConstants` merely reuses that construction.
-
-3. The current burden splits into two separate categories.
-   - Inside proofs, we manually install
-     `letI : (constantsOn α).Structure M := constantsOn.structure v`
-     or `haveI`.
-   - In theorem statements, we directly require
-     `[L[[α]].Structure M] [(L.lhomWithConstants α).IsExpansionOn M]`,
-     even when the theorem is really about “given `v : α → M`, regard `M` as the corresponding constant expansion”.
-
-4. The first category is currently concentrated in the following places.
-   - `Formula.realize_equivSentence_symm`
-     in `Mathlib/ModelTheory/Semantics.lean`
-   - `Theory.typeOf`
-     in `Mathlib/ModelTheory/Types.lean`
-   - `CompleteType.mem_typeOf`
-     in `Mathlib/ModelTheory/Types.lean`
-   - `isSatisfiable_union_distinctConstantsTheory_of_card_le`
-     in `Mathlib/ModelTheory/Satisfiability.lean`
-   - `models_formula_iff_onTheory_models_equivSentence`
-     in `Mathlib/ModelTheory/Satisfiability.lean`
-   - `ModelsBoundedFormula.realize_formula`
-     in `Mathlib/ModelTheory/Satisfiability.lean`
-
-5. The second category mainly appears in the constant/variable semantic transport lemmas in `Semantics.lean`.
-   Those theorems currently take an arbitrary `L[[α]]`-structure as input:
-   - `Term.realize_constantsToVars`
-   - `Term.realize_varsToConstants`
-   - `Term.realize_constantsVarsEquivLeft`
-   - `BoundedFormula.realize_constantsVarsEquiv`
-   - `Formula.realize_equivSentence_symm_con`
-   - `Formula.realize_equivSentence`
-
-6. `constantsOnMap_isExpansionOn` in `LanguageMap.lean` (line 364) also uses
-   `letI := constantsOn.structure fα` / `letI := constantsOn.structure fβ`.
-   This is not a valuation-driven constant-expansion, but rather a proof about compatibility
-   of two `constantsOn` structures under a map `f : α → β`.
-   It should not be forced into the new synonym, but it should be explicitly acknowledged
-   as out-of-scope for this refactor.
-
-7. Not every explicit instance should be eliminated.
-   The following results genuinely speak about an arbitrary `L[[α]]`-model, not “the expansion induced by some given valuation `v`”:
-   - `model_distinctConstantsTheory`
-     and `card_le_of_model_distinctConstantsTheory`
-     in `Semantics.lean`
-   - `ElementaryEmbedding.ofModelsElementaryDiagram`
-     in `ElementaryMaps.lean`
-   Those APIs should remain generic and should not be forced into valuation-specific form.
-
-8. There is another pain point in `Satisfiability.lean` that is related but not identical to this refactor:
-   after
-   `letI := (L.lhomWithConstants α).reduct M`,
-   `IsExpansionOn_reduct` still sometimes needs a manual `have`.
-   That is a reduct-side instance-resolution issue, not a valuation-driven constant-expansion issue.
-   The first pass of this refactor should not tie those two problems together.
-
-## Goals
-
-1. Introduce a general type synonym determined by `v : α → M`,
-   so that “the constant expansion of `M`” is represented by a dedicated type rather than by locally installing instances on bare `M`.
-
-2. Use that synonym to eliminate valuation-related
-   `letI : (constantsOn α).Structure M := ...`
-   and ugly terms of the form
-   `@Language.withConstantsStructure ... (constantsOn.structure v)`
-   from the `ModelTheory` module.
-
-3. Preserve the low-level generic API.
-   Wherever the mathematics genuinely needs an arbitrary `L[[α]]`-structure,
-   keep the
-   `[L[[α]].Structure M]` /
-   `[(L.lhomWithConstants α).IsExpansionOn M]`
-   versions rather than forcing an immediate signature rewrite.
-
-4. Make `Embedding.withConstants` a special case of the new general synonym,
-   so that the logic for attaching parameterized `L[[α]]`-structures to a fixed carrier is centralized in one implementation.
-
-## Core Design
-
-### 1. Add a general synonym in `LanguageMap.lean`
-
-Add a definition in the `FirstOrder.Language` namespace with shape similar to:
-
-```lean
-@[nolint unusedArguments]
-def ConstantsExpansion {M : Type w} [L.Structure M] {α : Type w'}
-    (_v : α → M) : Type w := M
-```
+# Refactor Plan for `Mathlib/ModelTheory/LanguageMap.lean`
+
+## Survey Summary
+
+The current `Mathlib/ModelTheory/LanguageMap.lean` already provides three core layers:
+
+- `LHom` / `LEquiv`, together with `reduct`, `sumInl`, `sumInr`, `sumElim`, and `sumMap`
+- The constant language `constantsOn α` and the expanded language `L[[α]]`
+- Several structure instances and utilities related to constant expansions, including
+  `lhomWithConstants`, `lhomWithConstantsMap`, and `Embedding.liftWithConstants`
+
+The main downstream modules that directly depend on this API are:
+
+- `Mathlib/ModelTheory/Syntax.lean`: `onTerm`, `onBoundedFormula`, `constantsVarsEquiv`,
+  `equivSentence`
+- `Mathlib/ModelTheory/Semantics.lean`: syntactic/semantic transport,
+  `realize_equivSentence`, `LHom.onTheory_model`
+- `Mathlib/ModelTheory/Definability.lean`: `Definable.map_expansion`, `Definable.mono`
+- `Mathlib/ModelTheory/Types.lean`: `CompleteType`, `typeOf`
+- `Mathlib/ModelTheory/Satisfiability.lean`: satisfiability and parameter theories
+- `Mathlib/ModelTheory/Substructures.lean`: `Substructure.withConstants`
+- `Mathlib/ModelTheory/ElementaryMaps.lean`: `ElementaryEmbedding.liftWithConstants`
+
+One further structural observation is important for the refactor scope:
+
+- The existing type-synonym technique is currently only used along one narrow path,
+  namely `Embedding.withConstants`, and `ElementaryEmbedding.liftWithConstants` simply reuses it.
+- By contrast, many other uses of constant expansion still proceed by installing local instances on
+  the bare carrier.
+- At the same time, some APIs genuinely need to talk about an arbitrary expanded-language model,
+  and should not be rewritten into valuation-specific form merely for uniformity.
+
+In addition, `~/working_directory/StabilityTheory/StabilityTheory/ModelTheory/LanguageMap.lean`
+already contains a batch of natural API extensions that are missing upstream:
+
+- `LHom.id_sumMap_id`
+- `LHom.sumMap_comp_sumMap`
+- `LHom.constantsOnMap_comp`
+- `LHom.constantsOnMap_id`
+- `LHom.addConstants_comp_lhomWithConstants`
+- `LHom.onTheory_lhomWithConstants`
+- `LEquiv.withConstantsCongr`
+- `LEquiv.addConstants`
+- `LEquiv.toLHom_addConstants`
+
+These lemmas indicate that the main weakness of the current `withConstants` design is not that
+definitions are absent, but that the functoriality and compatibility API is incomplete.
+
+## Current Pain Points
+
+1. Carrier-side packaging of constant interpretations is inconsistent.
+   At present, `Embedding.withConstants` only handles the specific situation where constants for
+   `A : Set M` are interpreted in another model along an embedding. Meanwhile, files such as
+   `Semantics.lean`, `Satisfiability.lean`, and `Types.lean` still repeatedly rely on local
+   instances of the form
+   `letI : (constantsOn α).Structure M := constantsOn.structure v`.
+
+2. The functorial API for `sum` and `withConstants` is incomplete.
+   The file currently has `sumMap_comp_inl` and `sumMap_comp_inr`, but it lacks structural lemmas
+   such as “composition is computed componentwise” and “identity is computed componentwise”, so
+   downstream files keep reproving these facts manually.
+
+3. The `LEquiv` layer lacks a standard interface saying that language equivalences lift through
+   adjoining constants.
+   This blocks a systematic transport of language equivalences to sentences, theories, complete
+   types, and similar objects.
+
+4. There is still a gap between syntactic transport and semantic transport.
+   `Syntax.lean` and `Semantics.lean` already contain many results about `onTerm`,
+   `realize_onFormula`, and `onTheory_model`, but the compatibility of these constructions with
+   `addConstants`, `lhomWithConstantsMap`, and reindexing of parameters is not expressed in a
+   systematic way.
+
+5. Parameter expansion is already type-general at the language level, but the user-facing API still
+   leans heavily toward `A : Set M`.
+   As a result, some interfaces are forced to work through subtypes and inclusions rather than
+   directly through arbitrary maps `α → M` or embeddings `α ↪ M`.
+
+6. There are really two different problems mixed together in the current codebase.
+   One is valuation-driven constant expansion: given `v : α → M`, regard `M` as an
+   `L[[α]]`-structure in a canonical way. The other is the genuinely generic study of arbitrary
+   `L[[α]]`-structures and expansions. The refactor should improve the first without collapsing the
+   second into a more specialized interface.
+
+7. Some related instance-resolution annoyances should be kept separate from this refactor.
+   In particular, reduct-side issues involving `IsExpansionOn_reduct` are adjacent in spirit, but
+   they are not the same problem as valuation-driven constant expansion and should not determine the
+   design of the first pass.
+
+## Additional Design Goals
+
+In addition to the four goals already listed by the user, the following goals should be added.
+
+1. Treat “a chosen interpretation of constants” as a first-class object.
+   Concretely, introduce a carrier-level type synonym parameterized by `v : α → M`, packaging the
+   non-canonical instances for `(constantsOn α).Structure` and `L[[α]].Structure`. Then
+   `Embedding.withConstants` should become either a special case or a thin wrapper around this more
+   general construction.
+
+2. Make `withConstants` explicitly bifunctorial.
+   One side varies with language maps, the other with reindexing maps on the parameter type.
+   `LHom.addConstants`, `LHom.constantsOnMap`, and `LEquiv.withConstantsCongr` should be part of
+   one coherent design rather than isolated utilities.
+
+3. Preserve the subset-based API as an easy wrapper for downstream users.
+   Interfaces with `A : Set M` should remain available, since `Definability`, `Substructures`, and
+   `ElementaryMaps` currently use them as the main user-facing entry point. However, their
+   implementation should reduce to the more general parameter-type version.
 
-Key points:
+4. Make explicit that language equivalences lift across constant expansions.
+   This supports `LanguageMap` itself, and also prepares the ground for comparing `L[[M]]` with
+   `L[[(Set.univ : Set M)]]`, transporting complete theories, and transporting complete types.
 
-- Use `def`, not `abbrev`.
-  We want a genuinely different head symbol so that different valuations produce distinct instance keys.
-- This definition belongs in `LanguageMap.lean`, since it is infrastructure for constant expansions.
-  Putting it in `Semantics.lean` would invert the dependency direction.
-- Do not introduce new notation.
-  This should remain a lightweight internal mechanism, not additional surface syntax.
+5. Control the direction of the simp API.
+   Only genuinely stable, one-way compatibility lemmas should receive `[simp]`. In particular,
+   lemmas involving `sumMap`, `comp`, and `withConstantsCongr` should be designed to avoid rewrite
+   loops.
 
-#### Universe consistency with `Embedding.withConstants`
+6. Preserve the distinction between valuation-facing APIs and genuinely generic expanded-language
+   APIs.
+   Results whose mathematics is really “given `v : α → M`, evaluate in the corresponding constant
+   expansion” should gain a canonical valuation-facing formulation. Results whose mathematics is
+   genuinely about arbitrary `L[[α]]`-models should remain generic.
 
-`ConstantsExpansion` returns `Type w`, the same universe as `M` (the carrier that `v` maps into).
-`Embedding.withConstants (f : M ↪[L] N) (A : Set M)` returns `Type w'`, the universe of `N`.
-These are consistent because in the embedding case, the valuation is
-`fun a : A => f a : ↑A → N`, so the carrier is `N : Type w'` and `ConstantsExpansion`
-returns `Type w'` accordingly (since the `w` in `ConstantsExpansion` unifies with `w'` of `N`).
+7. Centralize the carrier-level implementation of parameterized expansions.
+   The new valuation-driven packaging should become the common mechanism behind
+   `Embedding.withConstants`, rather than introducing a second parallel approach.
+
+8. Explicitly mark some nearby issues as out of scope for the first pass.
+   In particular, compatibility proofs such as `constantsOnMap_isExpansionOn`, and reduct-side
+   instance search issues around `IsExpansionOn_reduct`, should not be forced into the same design
+   bucket unless they naturally simplify afterward.
 
-### 2. Provide the standard instances for the synonym
+## Concrete Implementation Plan
 
-At minimum, add the following instances:
+### Phase A: Complete the algebraic API for `LHom` and `LEquiv`
 
-```lean
-instance : L.Structure (L.ConstantsExpansion v) := by
-  dsimp [Language.ConstantsExpansion]
-  infer_instance
+Goal: first upstream the pure API gaps that are already validated in the reference repository,
+while avoiding downstream definition changes.
 
-instance : (constantsOn α).Structure (L.ConstantsExpansion v) :=
-  constantsOn.structure v
+First batch of declarations that should likely go upstream directly:
 
-instance : L[[α]].Structure (L.ConstantsExpansion v) :=
-  L.withConstantsStructure α
+- `LHom.funext_iff` or an equivalent `LHom.ext_iff`
+- `LHom.id_sumMap_id`
+- `LHom.sumMap_comp_sumMap`
+- `LHom.constantsOnMap_comp`
+- `LHom.constantsOnMap_id`
+- `LHom.addConstants_comp_lhomWithConstants`
+- `LHom.onTheory_lhomWithConstants`
+- `LEquiv.withConstantsCongr`
+- `LEquiv.addConstants`
+- `LEquiv.toLHom_addConstants`
 
-instance : (L.lhomWithConstants α).IsExpansionOn (L.ConstantsExpansion v) :=
-  L.withConstants_expansion α
-```
+Second batch, depending on actual usage frequency:
 
-#### Instance resolution chain
+- `LEquiv.toLHom_injective`
+- `LEquiv.invLHom_injective`
+- Further compatibility lemmas relating `sumElim` and `sumMap`
+- Specialized versions at the `onTerm` / `onFormula` / `onSentence` level
 
-The expected instance resolution path for `L.ConstantsExpansion v` is:
+Expected benefits:
 
-1. `L.Structure (L.ConstantsExpansion v)` — unfolds to the existing `L.Structure M`.
-2. `(constantsOn α).Structure (L.ConstantsExpansion v)` — resolves to `constantsOn.structure v` (provided directly).
-3. `L[[α]].Structure (L.ConstantsExpansion v)` — resolves via `L.withConstantsStructure α`,
-   which combines (1) and (2) through `Language.Sum.instStructure`.
-4. `(L.lhomWithConstants α).IsExpansionOn (L.ConstantsExpansion v)` — resolves via `L.withConstants_expansion α`,
-   which depends on (3).
+- `LanguageMap.lean` itself becomes expressive enough to describe “sum maps and composition” and
+  “constant expansion and composition” as standard categorical structure
+- The patch-style `LanguageMap.lean` in `StabilityTheory` can be deleted
+- A uniform foundation is established for later `univ` comparisons and transport constructions
 
-Since the chain is short (each step is one hop), Lean's instance search should handle it
-without difficulty. If any step fails, the symptom will be a `failed to synthesize` error
-mentioning the exact missing link. In that case, provide the instance explicitly rather than
-lengthening the chain.
+### Phase B: Introduce a general type synonym for constant interpretations
 
-Also add the minimal set of genuinely useful `@[simp]` bridge lemmas, for example:
+Goal: eliminate the scattered pattern
+`letI : (constantsOn α).Structure M := ...`
+from multiple files.
 
-```lean
-@[simp] theorem con_eq {a : α} :
-    (L.con a : L.ConstantsExpansion v) = v a := rfl
-```
+Suggested approach:
 
-If later proofs repeatedly need to move between the synonym and the original `M`,
-add only the few `rfl`-level lemmas that are actually needed.
-Do not add a large batch of speculative coercions.
+- Introduce a general synonym inside `LanguageMap.lean`, parameterized by something like
+  `v : α → M`
+- Give this synonym canonical instances for
+  `[(constantsOn α).Structure _]` and `[L[[α]].Structure _]`
+- Rewrite the current `Embedding.withConstants` as a special case of this general synonym, so that
+  there are not two parallel packaging strategies
 
-However, include the following minimal bridging pair from the start,
-since proofs will almost certainly need to pass values between `M` and the synonym:
+At the design level, this phase should be understood as introducing a canonical carrier-level
+representation of valuation-driven constant expansion. The point is not just to reduce local
+instance noise, but to make the phrase “the expansion induced by `v : α → M`” correspond to a
+single standard object throughout the library.
 
-```lean
-/-- View an element of `M` as an element of the constant expansion. -/
-def ConstantsExpansion.mk (x : M) : L.ConstantsExpansion v := x
+The first downstream use sites that should be migrated:
 
-/-- View an element of the constant expansion as an element of `M`. -/
-def ConstantsExpansion.val (x : L.ConstantsExpansion v) : M := x
+- `Mathlib/ModelTheory/Semantics.lean`
+- `Mathlib/ModelTheory/Types.lean`
+- `Mathlib/ModelTheory/Satisfiability.lean`
 
-@[simp] theorem ConstantsExpansion.val_mk (x : M) :
-    (ConstantsExpansion.mk v x).val v = x := rfl
-```
+Design requirements:
 
-Add further coercions or `Equiv`s only if downstream proofs demand them.
+- The synonym should stay as definitional-equality-friendly as possible, so that existing `rfl`
+  proofs are not broken unnecessarily
+- Its name should avoid confusion with the existing `Language.withConstants`
+- Instance priorities must be chosen carefully to avoid ambiguity or loops with the current
+  `withConstantsStructure`
 
-### 3. Make `Embedding.withConstants` reuse the new core
+This phase should not attempt to absorb every use of explicit `constantsOn.structure`.
+Some appearances, especially those proving compatibility between two different constant-language
+structures under a reindexing map, belong to a different layer of abstraction and may reasonably
+remain outside the new synonym.
 
-Refactor
-`Embedding.withConstants (f : M ↪[L] N) (A : Set M)`
-to become a special case of the general synonym, preferably as:
+### Phase C: Promote parameter expansion from a subtype-based special case to a general interface
 
-```lean
-abbrev Embedding.withConstants (f : M ↪[L] N) (A : Set M) :=
-  (L := L).ConstantsExpansion (fun a : A => f a)
-```
+Goal: make “parameter language + interpretation map” the primary interface, with `A : Set M` only
+as a derived entry point.
 
-If turning it directly into an `abbrev` causes too much elaboration churn,
-keep the public outer definition but delegate all internal instances to the general synonym.
-Concretely, the fallback is:
+Suggested direction:
 
-```lean
--- Keep as an opaque def:
-@[nolint unusedArguments]
-def Embedding.withConstants (_f : M ↪[L] N) (_A : Set M) : Type w' := N
+- Treat the parameter collection uniformly as an arbitrary type `α`
+- Treat interpretation of parameters in a model uniformly as an arbitrary map `v : α → M`
+- View the case `A : Set M` as the special case `α := A`, `v := Subtype.val`
 
--- But delegate all instances via definitional equality:
-instance : L.Structure (f.withConstants A) :=
-  (inferInstance : L.Structure (L.ConstantsExpansion fun a : A => f a))
+Accordingly, the following existing interfaces should be reorganized into “general version +
+subset version”:
 
-instance : (constantsOn A).Structure (f.withConstants A) :=
-  (inferInstance : (constantsOn A).Structure (L.ConstantsExpansion fun a : A => f a))
+- `paramsStructure`
+- `constantsOnMap_isExpansionOn`
+- `lhomWithConstantsMap`
+- `map_constants_inclusion_isExpansionOn`
+- `Substructure.withConstants`
+- `Embedding.liftWithConstants`
+- `ElementaryEmbedding.liftWithConstants`
 
--- ... and so on for L[[A]].Structure and IsExpansionOn
-```
+The key point here is not to rewrite all definitions immediately, but first to generalize the
+underlying transport API so that the subset-based wrappers become routine.
 
-Also add a `@[simp]` lemma unifying the two when needed:
+### Phase D: Systematically fill in the syntactic and semantic transport lemmas
 
-```lean
-@[simp] theorem Embedding.withConstants_eq (f : M ↪[L] N) (A : Set M) :
-    f.withConstants A = L.ConstantsExpansion (fun a : A => f a) := rfl
-```
+Goal: make explicit the compatibility that is currently only implicit between `LanguageMap.lean`
+and `Syntax` / `Semantics`.
 
-Do not maintain a second parallel copy of the
-`L.Structure` / `constantsOn` / `L[[A]]`
-instance stack.
+Highest-priority directions:
 
-### 4. Add valuation-facing semantic wrappers
+- compatibility of `addConstants` with `onTerm`, `onBoundedFormula`, `onFormula`, `onSentence`
+- compatibility of `lhomWithConstantsMap` with the `realize_*` family of lemmas
+- compatibility of constant reindexing (`constantsOnMap`) with transport of sentences and theories
+- companion rewrite lemmas for `LEquiv.withConstantsCongr` at the `onSentence` / `onTheory` level
 
-The new synonym solves the problem of obtaining a canonical expanded model from a valuation.
-To make downstream theorem statements cleaner, we also need a thin wrapper layer.
+Files that benefit most from this migration:
 
-The highest-priority target is replacing goals like:
+- `Mathlib/ModelTheory/Semantics.lean`
+- `Mathlib/ModelTheory/Definability.lean`
+- `Mathlib/ModelTheory/Types.lean`
+- `Mathlib/ModelTheory/Satisfiability.lean`
 
-```lean
-@Sentence.Realize _ M
-  (@Language.withConstantsStructure L M _ α (constantsOn.structure v)) φ
-```
+This phase should include a valuation-facing wrapper layer for the main semantic constructions,
+while deliberately keeping the low-level generic theorems intact. In other words, the intended
+outcome is not to replace all generic statements by valuation-specific ones, but to add a cleaner
+canonical entry point for the valuation-driven use case and migrate internal call sites to it where
+appropriate.
 
-with statements phrased as “evaluate in `L.ConstantsExpansion v`”.
+### Phase E: Optional later extensions
 
-If
-`@Sentence.Realize _ (L.ConstantsExpansion v) _ φ`
-is already readable enough, use it directly.
-If not, add a very thin helper such as:
+This does not need to be part of the first refactor pass, but the refactor should leave room for
+it:
 
-```lean
-def Sentence.RealizeWithConstants (φ : L[[α]].Sentence) (v : α → M) : Prop :=
-  @Sentence.Realize _ (L.ConstantsExpansion v) _ φ
-```
+- a canonical `LEquiv` comparing `L[[M]]` and `L[[(Set.univ : Set M)]]`
+- API for transporting complete theories, complete types, and partial types
+- upstreaming the ideas from `StabilityTheory/ModelTheory/LanguageMapOnUniv.lean`
 
-Likewise, add `realizeWithConstants` / `RealizeWithConstants` wrappers for `Term` or `BoundedFormula`
-only if they materially improve theorem statements.
+If Phases A and B are designed well, these extensions should require only a small number of new
+definitions rather than another round of foundational lemmas.
 
-## File-by-File Execution Plan
+## Recommended PR Splitting
 
-### Step 1: `Mathlib/ModelTheory/LanguageMap.lean`
+To align with Mathlib’s preference for small, self-contained PRs, this should not be attempted as
+one large refactor. A better split is:
 
-1. Add the general synonym and its 4 core instances.
-2. Add 1 to 3 genuinely useful `@[simp]` lemmas for the synonym.
-3. Refactor `Embedding.withConstants` into a special case of the general synonym, or minimally delegate it to the new implementation.
-4. Recheck whether
-   - `Embedding.liftWithConstants`
-   - `ElementaryEmbedding.liftWithConstants`
-   - `withConstants_funMap_sumInr`
-   still go through with `rfl`, `simp`, and at most a small amount of `change`.
+1. Pure `LanguageMap` API strengthening.
+   Add only lemmas and `LEquiv` / `LHom` functorial interfaces, without changing downstream files.
 
-After this step, run file-level verification:
+2. General constant-interpretation synonym.
+   Introduce the new carrier-level wrapper in `LanguageMap.lean` and validate it with only a small
+   number of downstream migrations.
 
-```bash
-lake env lean Mathlib/ModelTheory/LanguageMap.lean
-lake env lean Mathlib/ModelTheory/ElementaryMaps.lean
-```
+3. Cleanup of instances in `Semantics`, `Types`, and `Satisfiability`.
+   The goal is to significantly reduce occurrences of `letI := constantsOn.structure ...`.
 
-### Step 2: `Mathlib/ModelTheory/Semantics.lean`
+4. Reorganization of subset-based wrappers.
+   Make the `A : Set M` path explicitly a special case of the general parameter interface.
 
-The strategy here is: keep the generic low-level theorems, add valuation-facing wrappers.
+5. Optional `univ` / complete-type transport layer.
 
-Keep the original signatures of:
+## Migration and Validation Checklist
 
-- `withConstants_funMap_sumInl`
-- `withConstants_relMap_sumInl`
-- `realize_constantsToVars`
-- `realize_varsToConstants`
-- `realize_constantsVarsEquivLeft`
-- `realize_constantsVarsEquiv`
-- `realize_equivSentence_symm_con`
-- `realize_equivSentence`
+Each phase should check at least the following:
 
-These results genuinely describe semantics in an arbitrary expanded structure, so they should not be rewritten on the first pass.
+- `Mathlib/ModelTheory/LanguageMap.lean` introduces no new instance loops
+- the relevant proofs in `Mathlib/ModelTheory/Syntax.lean` and
+  `Mathlib/ModelTheory/Semantics.lean` do not become worse because of simp-direction changes
+- `Mathlib/ModelTheory/Definability.lean`, `Types.lean`, and `Satisfiability.lean` still admit
+  short proofs of the original results
+- the wrappers around `withConstants` in `Substructures.lean` and `ElementaryMaps.lean` do not
+  become more awkward
+- new names remain consistent with existing naming patterns around
+  `sumMap`, `sumElim`, and `lhomWithConstantsMap`
+- valuation-driven local uses of `constantsOn.structure` decrease substantially, without forcing
+  genuinely generic expanded-language APIs into valuation-only form
+- reduct-side issues are not accidentally entangled with the valuation-driven refactor unless they
+  simplify as a byproduct
 
-But add or rewrite a valuation-facing layer:
+## End State
 
-1. Rewrite `Formula.realize_equivSentence_symm`
-   so that it no longer mentions
-   `@Language.withConstantsStructure ... (constantsOn.structure v)`.
+After the refactor, `LanguageMap.lean` should satisfy the following:
 
-2. If useful, add wrappers analogous to:
-   - `Term.realize_constantsToVars_of_constantsExpansion`
-   - `Term.realize_varsToConstants_of_constantsExpansion`
-   - `BoundedFormula.realize_constantsVarsEquiv_of_constantsExpansion`
-
-The exact names are not important.
-What matters is:
-
-- the theorem statement only quantifies over `v : α → M`,
-  without requiring the caller to manually provide `[L[[α]].Structure M]`;
-- the proof uses the new synonym instances directly,
-  without `letI : (constantsOn α).Structure M := ...`.
-
-After this step, verify:
-
-```bash
-lake env lean Mathlib/ModelTheory/Semantics.lean
-```
-
-### Step 3: `Mathlib/ModelTheory/Types.lean`
-
-This file should benefit most directly.
-
-Required changes:
-
-1. `Theory.typeOf`
-   currently installs
-   `haveI : (constantsOn α).Structure M := constantsOn.structure v`
-   and then takes `L[[α]].completeTheory M`.
-   Rewrite it to take the complete theory of `L.ConstantsExpansion v` directly.
-
-2. `CompleteType.mem_typeOf`
-   currently depends on a local `letI` in order to apply
-   `Formula.realize_equivSentence_symm`.
-   Rewrite it to use the new valuation-facing wrapper.
-
-3. `Theory.exists_modelType_is_realized_in`
-   probably does not need a major rewrite.
-   Keep the current generic proof unless the new wrapper makes it materially shorter.
-
-After this step, verify:
-
-```bash
-lake env lean Mathlib/ModelTheory/Types.lean
-```
-
-### Step 4: `Mathlib/ModelTheory/Satisfiability.lean`
-
-This file needs to be split into two subproblems.
-
-#### 4a. Replace local `constantsOn.structure` uses with the synonym
-
-Refactor the following sites:
-
-1. `isSatisfiable_union_distinctConstantsTheory_of_card_le`
-   Replace the witness model from “bare `M` with locally installed instances”
-   to the actual type `L.ConstantsExpansion v`.
-
-2. The reverse implication in `models_formula_iff_onTheory_models_equivSentence`.
-   This branch is exactly “given `v`, regard `M` as a model with those parameter constants”,
-   so it should use the synonym directly.
-
-3. `ModelsBoundedFormula.realize_formula`
-   should also be rewritten to use the new valuation-facing wrapper.
-
-#### 4b. Temporarily keep the reduct-side manual instance
-
-In the forward implication of
-`models_formula_iff_onTheory_models_equivSentence`,
-the pattern
-
-```lean
-letI := (L.lhomWithConstants α).reduct M
-have : (L.lhomWithConstants α).IsExpansionOn M := ...
-```
-
-is not the primary target of this synonym refactor.
-If that explicit `have` is still needed after 4a is complete,
-leave it in place rather than trying to “clean it up” by changing global `IsExpansionOn_reduct` behavior.
-
-After this step, verify:
-
-```bash
-lake env lean Mathlib/ModelTheory/Satisfiability.lean
-```
-
-### Step 5: `Mathlib/ModelTheory/ElementaryMaps.lean`
-
-This is mainly consistency cleanup.
-
-1. Confirm that `ElementaryEmbedding.liftWithConstants`
-   still works after `Embedding.withConstants` is refactored into a special case of the general synonym.
-
-2. Keep `ElementaryEmbedding.ofModelsElementaryDiagram`
-   generic.
-   It really does require an arbitrary `L[[M]]`-model, so it should not be rewritten into a valuation-specific API just to reduce local instance noise.
-
-After this step, verify again:
-
-```bash
-lake env lean Mathlib/ModelTheory/ElementaryMaps.lean
-```
-
-## Compatibility Strategy
-
-1. On the first pass, do not rename the existing generic theorems.
-   Add valuation-facing wrappers first, then migrate internal module call sites to those wrappers.
-
-2. Only consider a second-pass API cleanup if both conditions hold:
-   - the new wrappers cover all valuation-driven use cases that users actually need;
-   - the old generic names have become actively misleading.
-
-3. Preserve the public name `Embedding.withConstants`.
-   Even if the implementation changes internally, downstream code should not need to care.
-
-## Audit Checklist
-
-After each migration phase, run:
-
-```bash
-rg -n "letI\s*:.*constantsOn|letI\s*:=\s*constantsOn\.structure|haveI\s*:.*constantsOn|@Language\.withConstantsStructure|constantsOn\.structure\s+\w" Mathlib/ModelTheory
-```
-
-The intended outcome is:
-
-- no valuation-local `constantsOn.structure` remains in `Types.lean`;
-- only reduct-side explicit instances remain in `Satisfiability.lean`, and only where intentionally allowed;
-- `Semantics.lean` no longer contains
-  `@Language.withConstantsStructure ... (constantsOn.structure v)`;
-- `constantsOnMap_isExpansionOn` in `LanguageMap.lean` retains its `letI` uses
-  (they are out-of-scope for this refactor).
-
-Also audit public theorem assumptions involving expanded-language structures:
-
-```bash
-rg -n "\\[L\\[\\[[^]]+\\]\\]\\.Structure|\\(L\\.lhomWithConstants .*\\)\\.IsExpansionOn" Mathlib/ModelTheory
-```
-
-Audit standard:
-
-- keep genuinely generic results generic;
-- for purely valuation-facing results, add or migrate to wrappers.
-
-## Final Verification
-
-Run file-level checks in dependency order:
-
-```bash
-lake env lean Mathlib/ModelTheory/LanguageMap.lean
-lake env lean Mathlib/ModelTheory/Semantics.lean
-lake env lean Mathlib/ModelTheory/Types.lean
-lake env lean Mathlib/ModelTheory/Satisfiability.lean
-lake env lean Mathlib/ModelTheory/ElementaryMaps.lean
-```
-
-If those pass, run module-level builds:
-
-```bash
-lake build Mathlib.ModelTheory.LanguageMap
-lake build Mathlib.ModelTheory.Semantics
-lake build Mathlib.ModelTheory.Types
-lake build Mathlib.ModelTheory.Satisfiability
-lake build Mathlib.ModelTheory.ElementaryMaps
-```
-
-If the refactor touches files beyond those five, add corresponding `lake env lean` checks and then run one final `lake build`.
-
-### Downstream Impact Check
-
-Before final verification, check whether any files outside `Mathlib/ModelTheory/`
-depend on the refactored APIs:
-
-```bash
-rg -l "Embedding\.withConstants|constantsOn\.structure|withConstantsStructure" Mathlib --glob '!Mathlib/ModelTheory/**'
-```
-
-If matches are found, verify those files also compile after the refactor.
-
-## Done Criteria
-
-This refactor is complete when all of the following hold:
-
-1. There is a general valuation-driven type synonym,
-   and `Embedding.withConstants` either reuses it directly or gets all of its instances from it.
-
-2. The valuation-related
-   `letI : (constantsOn α).Structure M := ...`
-   patterns in `Types.lean` and `Satisfiability.lean`
-   have been eliminated.
-
-3. `Semantics.lean` contains clean valuation-facing wrappers,
-   and no longer exposes
-   `@Language.withConstantsStructure ... (constantsOn.structure v)`.
-
-4. Genuinely generic expanded-language APIs remain intact,
-   and have not been incorrectly collapsed into valuation-only forms.
-
-5. All affected files pass `lake env lean`,
-   and the module-level `lake build` checks pass.
+- it gives a complete and compositional description of the relationships among language maps,
+  sums, constant expansions, and parameter reindexing
+- it has a canonical carrier-level packaging for constant interpretations over arbitrary parameter
+  types
+- subset-based usage remains simple, but no longer dictates the underlying design
+- downstream modules no longer need local instance tricks to manufacture constant-expansion
+  structures on demand
+- valuation-driven semantic entry points are clean, while genuinely generic expanded-language APIs
+  remain available and conceptually separate
+- the patch-style API currently living in the reference repository can be upstreamed naturally
+  rather than maintained as a long-term fork
