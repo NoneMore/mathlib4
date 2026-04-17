@@ -174,20 +174,23 @@ theorem isElementary_closure (hA : L.MeetsDefinable A) :
   let D : Set M := {y : M | φ.Realize default (Fin.snoc (Subtype.val ∘ x) y)}
   have hD_ne : D.Nonempty := ⟨a,hφ⟩
   have hD : A.Definable₁ L D := by
-    simp only [Definable₁, Definable, Fin.isValue]
-    refine ⟨((L.lhomWithConstants A).onBoundedFormula φ).toFormula.relabel
-      (Sum.elim Empty.elim id) |>.subst fun i => Fin.lastCases (Term.var 0)
-        (fun j => (L.con ⟨x j, by
-        nth_rw 1 [← hA.closure_eq_self]
-        simp only [Subtype.coe_prop]
-        ⟩).term) i, ?_⟩
-    ext v
-    simp only [Fin.isValue, mem_setOf_eq, Formula.relabel, Formula.Realize,
-      BoundedFormula.realize_subst, BoundedFormula.realize_relabel, Nat.add_zero, Fin.castAdd_zero,
-      Fin.cast_refl, Function.comp_id, Fin.natAdd_zero, D]
-    rw [← Formula.Realize, BoundedFormula.realize_toFormula, LHom.realize_onBoundedFormula]
-    congr! 1
-    ext i; cases i using Fin.lastCases <;> simp
+    simp only [Definable₁]
+    have : A.DefinableMap L fun v : Fin 1 → M => Fin.snoc (fun i => x i) (v 0) := by
+      simp only [DefinableMap, Fin.isValue]
+      refine Fin.lastCases ?_ ?_
+      · simp only [Fin.isValue, Fin.snoc_last]; fun_prop
+      · simp only [Fin.isValue, Fin.snoc_castSucc]
+        intro i
+        have : ↑(x i) ∈ A := by nth_rw 1 [← hA.closure_eq_self]; simp
+        fun_prop (disch := assumption)
+    refine Set.Definable.preimage_map this ?_
+    apply Definable.mono ?_ (Set.empty_subset A)
+    rw [Set.empty_definable_iff]
+    refine ⟨φ.toFormula.relabel (Sum.elim Empty.elim id), ?_⟩
+    ext xs
+    simp only [mem_setOf_eq, Formula.realize_relabel, BoundedFormula.realize_toFormula]
+    change φ.Realize default xs ↔ _
+    congr!
   obtain ⟨b, hbD, hbA⟩ := hA D hD_ne hD
   exact ⟨⟨b, by rwa [← hA.closure_eq_self] at hbA⟩, hbD⟩
 
